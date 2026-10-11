@@ -1,15 +1,76 @@
 name: ci
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
   workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional lab test-name pattern; empty runs the full suite'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read #  for actions/checkout
 
 jobs:
+  # Inlined from hapijs/.github/.github/workflows/ci-module.yml@master (the
+  # reusable workflow the upstream `test` job calls) so the job can carry a
+  # timeout-minutes, which GitHub forbids on a `uses:` job. Matrix, steps and
+  # commands are verbatim, minus node 12 (@hapi/lab 25 needs Node 14+).
   test:
-    uses: hapijs/.github/.github/workflows/ci-module.yml@master
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [[ubuntu, latest], [windows, latest]]
+        node: ["16", "14"]
+
+    runs-on: ${{ join(matrix.os, '-') }}
+    name: ${{ matrix.os[0] }} node@${{ matrix.node }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: registry time machine
+        shell: bash
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2023-03-21T08:10:16.604000Z
+      - name: install
+        run: npm install
+      - name: test
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            npx lab -a @hapi/code -Y -g "${{ inputs.test-filter }}"
+          else
+            npm test
+          fi
+
+  pack:
+    runs-on: ubuntu-latest
+    name: pack
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 16.19.0
+      - name: registry time machine
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2023-03-21T08:10:16.604000Z
+      - name: install
+        run: npm install
+      - name: build browser bundle
+        run: cd browser && npm install && npm run build
+      - name: pack
+        run: |
+          npm i -g npm@8.19.3
+          npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: joi-*.tgz
+          if-no-files-found: error
